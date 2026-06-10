@@ -3,6 +3,7 @@ import requests
 from bs4 import BeautifulSoup
 from datetime import datetime
 import pytz
+import re
  
 app = Flask(__name__)
  
@@ -34,26 +35,40 @@ def zeiterfassung_stoppen(username, password):
     if "loginerrormessage" in response.text or "/login" in response.url:
         return {"success": False, "skipped": False, "message": "Login fehlgeschlagen – Zugangsdaten prüfen!"}
  
-    # Schritt 3: Hauptseite abrufen und prüfen ob Zeiterfassung läuft
+    # Schritt 3: Hauptseite abrufen
     main_page = session.get(f"{BASE_URL}/my/")
-    soup = BeautifulSoup(main_page.text, "html.parser")
+    html = main_page.text
  
-    # Stopp-Button suchen (fa-stop Icon = Zeiterfassung läuft)
-    stop_button = soup.find("a", class_="register-time-btn-nav")
+    # Schritt 4: access_token aus dem HTML auslesen
+    token_match = re.search(r'"access_token":"([a-f0-9]+)"', html)
+    if not token_match:
+        return {"success": False, "skipped": False, "message": "access_token nicht gefunden"}
+    access_token = token_match.group(1)
  
-    if not stop_button:
+    # Schritt 5: sesskey aus dem HTML auslesen
+    sesskey_match = re.search(r'"sesskey":"([^"]+)"', html)
+    if not sesskey_match:
+        return {"success": False, "skipped": False, "message": "sesskey nicht gefunden"}
+    sesskey = sesskey_match.group(1)
+ 
+    # Schritt 6: Prüfen ob Zeiterfassung läuft (fa-stop vorhanden?)
+    if "fa-stop" not in html:
         return {"success": False, "skipped": True, "message": "Zeiterfassung läuft nicht – nichts zu tun."}
  
-    # Prüfen ob es der Stopp-Button ist (fa-stop) oder der Start-Button (fa-play)
-    icon = stop_button.find("i", class_="fa-stop")
-    if not icon:
-        return {"success": False, "skipped": True, "message": "Zeiterfassung läuft nicht – nichts zu tun."}
+    # Schritt 7: Zeiterfassung stoppen
+    stopp_url = (
+        f"{BASE_URL}/theme/cclms/internallib.php"
+        f"?type=register_user_login"
+        f"&extra_data_access_token={access_token}"
+        f"&last_login_status=1"
+        f"&sesskey={sesskey}"
+    )
+    result = session.get(stopp_url)
  
-    # Schritt 4: Zeiterfassung stoppen
-    stop_url = BASE_URL + stop_button["href"]
-    session.get(stop_url)
- 
-    return {"success": True, "skipped": False, "message": "Zeiterfassung erfolgreich gestoppt!"}
+    if result.status_code == 200:
+        return {"success": True, "skipped": False, "message": "Zeiterfassung erfolgreich gestoppt!"}
+    else:
+        return {"success": False, "skipped": False, "message": f"Fehler beim Stoppen: HTTP {result.status_code}"}
  
  
 @app.route("/stopp", methods=["POST"])
